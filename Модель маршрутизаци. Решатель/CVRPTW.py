@@ -94,7 +94,6 @@ def print_solution(data, manager, routing, solution):
     print(f"Суммарный вес перемещённого груза: {total_load} кг")
 
 def main():
-    """решение CVRPTW задачи."""
     # Создаем датасет модели на основе заполненной выше информации
     data = create_data_model()
 
@@ -109,6 +108,7 @@ def main():
     # Создаем и транзитный коллбэк
     def time_callback(from_index, to_index):
         # Возвращает время, необходимое на проезд от from_node до to_node
+        # Преобразовывает индекс переменной маршрутизации в индекс внутри матрицы времени
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
         return data["time_matrix"][from_node][to_node]
@@ -120,10 +120,11 @@ def main():
 
     # Добавляем ограничения вместимости
     def demand_callback(from_index):
-        # Возвращает значение "потребности" каждого пункта выдачи
+        # Возвращает значение "потребности" каждого пункта выдачи с помощью преобразований, как в time_callback
         from_node = manager.IndexToNode(from_index)
         return data["demands"][from_node]
 
+    #Добавлется измеряемая величина, которая описывает грузоподъёмность каждого ТС.
     demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
     routing.AddDimensionWithVehicleCapacity(
         demand_callback_index,
@@ -132,6 +133,7 @@ def main():
         True,  # Накопительная переменная загрузки устанавливается в ноль при начале маршрута каждого ТС
         "Capacity",
     )
+    #Добавляется измеряемая величина, которая описывает время, которое затрачивает каждое ТС на маршрут
     time = "Time"
     routing.AddDimension(
         transit_callback_index,
@@ -140,27 +142,32 @@ def main():
         False, #Накопительная переменная времени не устанавливается в ноль при начале маршрута каждого ТС
         time
     )
+
+    #Включает измерение времени в модель, если ранее было описано такое измерение
     time_dimension = routing.GetDimensionOrDie(time)
+    #Добавляет ограничения временных окон на каждую вершину, за исключением Депо
     for location_index, time_window in enumerate(data["time_windows"]):
         if location_index == data["depot"]:
             continue
         index = manager.NodeToIndex(location_index)
         time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
+    #Добавляет ограничения временных окон в каждое Депо. В нашем случае оно одно
     depot_index = data["depot"]
     for vehicle_index in range(data["num_vehicles"]):
         index = routing.Start(vehicle_index)
         time_dimension.CumulVar(index,).SetRange(data["time_windows"][depot_index][0],data["time_windows"][depot_index][1])
 
-    for i in range(data["num_vehicles"]):
+    for i in range(data["num_vehicles"]):  #Для каждой машины задаются две переменных времени начала и конца пути
         routing.AddVariableMinimizedByFinalizer(time_dimension.CumulVar(routing.Start(i)))
         routing.AddVariableMinimizedByFinalizer(time_dimension.CumulVar(routing.End(i)))
 
 
-    # Устанавливаем эвристику первого решения
+    # Первое решение пытаемся искать путем наименьшей стоимости дуги
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     )
+    # Улучшаем решение с помощью метода локального поиска
     search_parameters.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
